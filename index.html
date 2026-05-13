@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>TanelCMD</title>
+<!--
+╔══════════════════════════════════════════════════════════════════╗
+║  TanelCMD v7 — CHANGE LOG                                       ║
+╠══════════════════════════════════════════════════════════════════╣
+║  NEW vs v6:                                                      ║
+║  • Zero personal data in source code — clean repo history       ║
+║  • Hardcoded dates (sobriety/kiisa) removed from source         ║
+║    Now read from Drive JSON: config.sobrietyStart, kiisaStart   ║
+║  • Hardcoded milestones removed — read from Drive JSON          ║
+║    milestones array (label, sub, date, active)                  ║
+║  • All personal labels (Kiisa, Elering, Volteron) now in Drive  ║
+║  • App state expanded: config + milestones alongside items      ║
+║  • Saves preserve milestones + config (pass-through)            ║
+║  • Fresh repo — clean git history, no exposed personal data     ║
+║                                                                  ║
+║  RETAINED FROM v6:                                               ║
+║  • Setup screen (Script URL + token, localStorage only)         ║
+║  • Token auth on every request                                  ║
+║  • Local-first startup, background Drive sync                   ║
+║  • All task management, categories, deadlines, notes            ║
+║  • Custom Mo–Su date picker, dd/mm/yyyy                          ║
+║  • Inline delete, sync status indicator, reset connection       ║
+╚══════════════════════════════════════════════════════════════════╝
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/syne@5.0.3/700.css"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/dm-mono@5.0.3/400.css"/>
+<script src="https://cdn.jsdelivr.net/npm/preact@10.22.0/dist/preact.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/preact@10.22.0/hooks/dist/hooks.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#f9fafb;font-family:'DM Mono','Courier New',monospace;-webkit-tap-highlight-color:transparent}</style>
+</head>
+<body>
+<div id="R" style="max-width:680px;margin:0 auto;min-height:100vh;background:#f9fafb"></div>
+<script>
+var h=preact.h,render=preact.render;
+var useState=preactHooks.useState,useEffect=preactHooks.useEffect,useRef=preactHooks.useRef;
+var html=htm.bind(h);
+
+/* ── THEME ── */
+var TEAL="#075E54",BK="#111111";
+var MONO="'DM Mono','Courier New',monospace",SYNE="'Syne',sans-serif";
+var SDOT={open:"#378ADD","in-progress":"#EF9F27",deferred:"#888780",done:"#1D9E75"};
+var SLBL={open:"Open","in-progress":"In progress",deferred:"Deferred",done:"Done"};
+var ALL_S=["open","in-progress","deferred","done"];
+var CSTYLE={legal:{bg:"#dbeafe",text:"#1e40af"},business:{bg:"#dcfce7",text:"#166534"},professional:{bg:"#d1fae5",text:"#065f46"},health:{bg:"#fef9c3",text:"#854d0e"},personal:{bg:"#f3f4f6",text:"#374151"}};
+var MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+var WDAYS=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+/* ── DEFAULTS — no personal data ── */
+var DEF_ITEMS=[];
+var DEF_SCHEDULE={1:"",2:"",4:"",5:"",6:"",0:""};
+var DEF_CONFIG={sobrietyStart:null,kiisaStart:null};
+var DEF_MILESTONES=[];
+
+/* ── CREDENTIALS — stored in localStorage only, never in source ── */
+function loadCreds(){return lGet("tc_config")||null}
+function saveCreds(c){lSet("tc_config",c)}
+
+/* ── LOCAL STORAGE ── */
+function lGet(k){try{var v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}}
+function lSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
+
+/* ── APPS SCRIPT API ──
+   GET with token reads Drive JSON.
+   POST with token+data writes Drive JSON.
+   Form-encoded avoids CORS preflight on mobile. ── */
+function scriptLoad(cfg){
+  return fetch(cfg.url+"?token="+encodeURIComponent(cfg.token))
+    .then(function(r){return r.json()}).catch(function(){return null});
+}
+function scriptSave(cfg,state){
+  var b=new URLSearchParams();
+  b.append("token",cfg.token);b.append("data",JSON.stringify(state));
+  return fetch(cfg.url,{method:"POST",body:b}).then(function(r){return r.ok}).catch(function(){return false});
+}
+
+/* ── UTILITIES ── */
+function uid(){return"i"+Date.now()+Math.random().toString(36).slice(2,5)}
+function todayStr(){return new Date().toISOString().slice(0,10)}
+function fmtTs(ts){return ts?new Date(ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}):""}
+function fmtDate(ds){if(!ds)return"";var p=ds.split("-");return p[2]+"/"+p[1]+"/"+p[0]}
+function daysUntil(ds){if(!ds)return null;var n=new Date();n.setHours(0,0,0,0);var t=new Date(ds);t.setHours(0,0,0,0);return Math.round((t-n)/86400000)}
+function daysSince(ds){if(!ds)return 0;var n=new Date();n.setHours(0,0,0,0);var t=new Date(ds);t.setHours(0,0,0,0);return Math.round((n-t)/86400000)}
+function dlLabel(d){
+  if(d===null)return null;
+  if(d<0)return{text:Math.abs(d)+"d overdue",color:"#ef4444"};
+  if(d===0)return{text:"Today",color:"#ef4444"};
+  if(d===1)return{text:"Tomorrow",color:"#EF9F27"};
+  if(d<=7)return{text:d+"d",color:"#EF9F27"};
+  if(d<=30)return{text:d+"d",color:"#6b7280"};
+  return{text:d+"d",color:"#9ca3af"};
+}
+function nextSessions(sch){
+  var now=new Date(),dow=now.getDay(),res=[];
+  var ent=Object.entries(sch).map(function(e){return{d:Number(e[0]),label:e[1]}}).filter(function(e){return e.label&&e.label.trim()});
+  for(var o=0;o<=7;o++){var d=(dow+o)%7,m=ent.find(function(e){return e.d===d});
+    if(m){var dt=new Date(now);dt.setDate(dt.getDate()+o);res.push({d:m.d,label:m.label,offset:o,dateStr:dt.toISOString().slice(0,10)});if(res.length===2)break}}
+  return res;
+}
+function sessIcon(l){var s=(l||"").toLowerCase();
+  if(s.indexOf("run")>=0||s.indexOf("jog")>=0)return"🏃";
+  if(s.indexOf("gym")>=0||s.indexOf("circuit")>=0||s.indexOf("strength")>=0)return"💪";
+  if(s.indexOf("flex")>=0||s.indexOf("swim")>=0)return"🔄";return"🏃";
+}
+function calDays(y,m){var fd=new Date(y,m,1).getDay(),off=(fd+6)%7,tot=new Date(y,m+1,0).getDate(),d=[];
+  for(var i=0;i<off;i++)d.push(null);for(var j=1;j<=tot;j++)d.push(j);return d;}
+
+/* ── SHARED STYLES ── */
+var F={fontFamily:MONO,width:"100%",padding:"9px 11px",border:"0.5px solid #d1d5db",borderRadius:8,fontSize:13,background:"#fff",color:BK,boxSizing:"border-box",outline:"none"};
+var BP={fontFamily:MONO,cursor:"pointer",border:"none",borderRadius:8,fontSize:13,padding:"8px 16px",background:TEAL,color:"#fff",display:"inline-flex",alignItems:"center",gap:6};
+var BS={fontFamily:MONO,cursor:"pointer",border:"0.5px solid #d1d5db",borderRadius:8,fontSize:13,padding:"7px 14px",background:"transparent",color:"#6b7280",display:"inline-flex",alignItems:"center",gap:6};
+
+/* ── DATE PICKER — Monday first, dd/mm/yyyy ── */
+function DatePicker(p){
+  var initV=function(){if(p.value){var a=p.value.split("-");return{year:+a[0],month:+a[1]-1}}var n=new Date();return{year:n.getFullYear(),month:n.getMonth()}};
+  var s1=useState(false),open=s1[0],setOpen=s1[1];
+  var s2=useState(initV),vw=s2[0],setVw=s2[1];
+  var ref=useRef(null);
+  useEffect(function(){
+    if(!open)return;
+    var h=function(e){if(ref.current&&!ref.current.contains(e.target))setOpen(false)};
+    document.addEventListener("mousedown",h);return function(){document.removeEventListener("mousedown",h)};
+  },[open]);
+  var days=calDays(vw.year,vw.month);
+  var selDay=p.value?+p.value.split("-")[2]:null;
+  var isSelMo=p.value&&+p.value.split("-")[0]===vw.year&&+p.value.split("-")[1]-1===vw.month;
+  var pick=function(d){if(!d)return;p.onChange(vw.year+"-"+String(vw.month+1).padStart(2,"0")+"-"+String(d).padStart(2,"0"));setOpen(false)};
+  var td=new Date();
+  return html`<div ref=${ref} style=${{position:"relative"}}>
+    <div onClick=${function(){setOpen(!open)}} style=${{...F,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <span style=${{color:p.value?BK:"#9ca3af"}}>${p.value?fmtDate(p.value):"dd/mm/yyyy"}</span>
+      <span style=${{fontSize:11,color:"#9ca3af"}}>▾</span>
+    </div>
+    ${open&&html`<div style=${{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:300,background:"#fff",border:"0.5px solid #d1d5db",borderRadius:10,padding:14,width:256,boxShadow:"0 4px 20px rgba(0,0,0,0.12)"}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <button onClick=${function(){setVw(function(v){return v.month===0?{year:v.year-1,month:11}:{year:v.year,month:v.month-1}})}} style=${{...BS,padding:"3px 10px",fontSize:17}}>‹</button>
+        <span style=${{fontSize:13,fontWeight:600,color:BK}}>${MONTHS[vw.month]} ${vw.year}</span>
+        <button onClick=${function(){setVw(function(v){return v.month===11?{year:v.year+1,month:0}:{year:v.year,month:v.month+1}})}} style=${{...BS,padding:"3px 10px",fontSize:17}}>›</button>
+      </div>
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:4}}>
+        ${["Mo","Tu","We","Th","Fr","Sa","Su"].map(function(d){return html`<div style=${{textAlign:"center",fontSize:11,color:"#9ca3af",fontWeight:600,padding:"3px 0"}}>${d}</div>`})}
+      </div>
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1}}>
+        ${days.map(function(d,i){var sel=isSelMo&&d===selDay,today=d&&td.getDate()===d&&td.getMonth()===vw.month&&td.getFullYear()===vw.year;
+          return html`<div key=${i} onClick=${function(){pick(d)}} style=${{textAlign:"center",fontSize:12,padding:"6px 2px",borderRadius:6,cursor:d?"pointer":"default",background:sel?TEAL:today?"#eff8f6":"transparent",color:sel?"#fff":today?TEAL:d?BK:"transparent",fontWeight:sel||today?600:400}}>${d||""}</div>`})}
+      </div>
+      <div style=${{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"0.5px solid #f3f4f6"}}>
+        <button onClick=${function(){p.onChange(null);setOpen(false)}} style=${{...BS,fontSize:12,padding:"4px 9px"}}>Clear</button>
+        <button onClick=${function(){p.onChange(todayStr());setOpen(false)}} style=${{...BS,fontSize:12,padding:"4px 9px"}}>Today</button>
+      </div>
+    </div>`}
+  </div>`;
+}
+
+/* ── SHARED COMPONENTS ── */
+function Pill(p){return html`<button onClick=${p.onClick} style=${{fontFamily:MONO,cursor:"pointer",fontSize:12,padding:"4px 11px",borderRadius:20,border:p.on?"none":"0.5px solid #d1d5db",background:p.on?TEAL:"transparent",color:p.on?"#fff":"#6b7280"}}>${p.label}</button>`}
+function Lbl(p){return html`<div style=${{fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",color:"#9ca3af",marginBottom:7}}>${p.children}</div>`}
+function NavBar(p){
+  return html`<div style=${{display:"flex",background:"#fff",borderBottom:"0.5px solid #e5e7eb"}}>
+    ${[["home","Home"],["schedule","Schedule"],["list","Items"],["settings","⚙"]].map(function(t){
+      return html`<button key=${t[0]} onClick=${function(){p.onNav(t[0])}} style=${{fontFamily:MONO,cursor:"pointer",border:"none",background:"transparent",fontSize:t[0]==="settings"?15:12,padding:"11px 0",flex:t[0]==="settings"?"0 0 48px":1,color:p.cur===t[0]?TEAL:"#9ca3af",borderBottom:p.cur===t[0]?"2px solid "+TEAL:"2px solid transparent",fontWeight:p.cur===t[0]?600:400,textAlign:"center"}}>${t[1]}</button>`})}
+  </div>`;
+}
+
+/* Item card with inline delete confirmation */
+function ItemCard(p){
+  var item=p.item,cs=(p.catStyles&&p.catStyles[item.cat])||{bg:"#f3f4f6",text:"#374151"};
+  var s1=useState(false),hov=s1[0],setHov=s1[1];
+  var s2=useState(false),conf=s2[0],setConf=s2[1];
+  var dl=daysUntil(item.deadline),dlLbl=dlLabel(dl);
+  return html`<div onMouseEnter=${function(){setHov(true)}} onMouseLeave=${function(){setHov(false);setConf(false)}} style=${{background:"#fff",borderRadius:10,marginBottom:8,border:"0.5px solid "+(hov?"#9ca3af":"#e5e7eb"),position:"relative"}}>
+    <div onClick=${p.onOpen} style=${{padding:"13px 15px",cursor:"pointer"}}>
+      <div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+        <span style=${{width:8,height:8,borderRadius:"50%",background:SDOT[item.status],flexShrink:0}}/>
+        <span style=${{fontSize:14,fontWeight:600,color:BK,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${item.title}</span>
+        <span style=${{fontSize:11,padding:"2px 9px",borderRadius:20,background:cs.bg,color:cs.text,flexShrink:0}}>${item.cat}</span>
+      </div>
+      <div style=${{display:"flex",fontSize:12,color:"#9ca3af",paddingLeft:16,gap:8}}>
+        <span>${SLBL[item.status]}</span>
+        ${dlLbl&&html`<span style=${{color:dlLbl.color}}>· ${dlLbl.text}</span>`}
+      </div>
+    </div>
+    ${hov&&p.onDelete&&!conf&&html`<button onClick=${function(e){e.stopPropagation();setConf(true)}} style=${{position:"absolute",top:10,right:10,background:"#fff1f2",border:"0.5px solid #fca5a5",borderRadius:6,color:"#ef4444",cursor:"pointer",fontSize:12,padding:"3px 8px",fontFamily:MONO}}>✕</button>`}
+    ${conf&&html`<div onClick=${function(e){e.stopPropagation()}} style=${{position:"absolute",top:8,right:8,display:"flex",gap:6,alignItems:"center",background:"#fff",padding:"4px 8px",borderRadius:8,border:"0.5px solid #fca5a5",boxShadow:"0 2px 8px rgba(0,0,0,0.08)"}}>
+      <span style=${{fontSize:12,color:"#ef4444"}}>Delete?</span>
+      <button onClick=${function(e){e.stopPropagation();p.onDelete(item.id)}} style=${{...BP,fontSize:11,padding:"3px 9px",background:"#ef4444"}}>Yes</button>
+      <button onClick=${function(e){e.stopPropagation();setConf(false)}} style=${{...BS,fontSize:11,padding:"3px 9px"}}>No</button>
+    </div>`}
+  </div>`;
+}
+
+/* ── HOME VIEW ──
+   Sober streak and countdown read from Drive config — hidden if null. ── */
+function HomeView(p){
+  var cfg=p.config||DEF_CONFIG;
+  var sob=cfg.sobrietyStart?daysSince(cfg.sobrietyStart):null;
+  var kd=cfg.kiisaStart?daysUntil(cfg.kiisaStart):null;
+  var pinnedM=(p.milestones||[]).find(function(m){return m.date===cfg.kiisaStart});
+  var active=p.items.filter(function(i){return i.status==="open"||i.status==="in-progress"}).length;
+  var urgent=p.items.filter(function(i){if(i.status==="done")return false;var d=daysUntil(i.deadline);return d!==null&&d<=7})
+    .sort(function(a,b){return daysUntil(a.deadline)-daysUntil(b.deadline)});
+  var ns=nextSessions(p.schedule);
+  return html`<div style=${{padding:"18px 16px 80px"}}>
+    <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+      ${sob!==null&&html`<div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:"14px 16px"}}>
+        <div style=${{fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",color:"#9ca3af",marginBottom:8}}>Sober streak</div>
+        <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:32,color:sob>=14?"#1D9E75":TEAL,lineHeight:1}}>${sob}</div>
+        <div style=${{fontSize:12,color:"#9ca3af",marginTop:4}}>day${sob===1?"":"s"} · since ${fmtDate(cfg.sobrietyStart).slice(0,5)}</div>
+      </div>`}
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:"14px 16px"}}>
+        <div style=${{fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",color:"#9ca3af",marginBottom:8}}>Active items</div>
+        <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:32,color:BK,lineHeight:1}}>${active}</div>
+        <div style=${{fontSize:12,color:"#9ca3af",marginTop:4}}>open or in progress</div>
+      </div>
+    </div>
+    ${kd!==null&&kd>=0&&html`<div style=${{background:"#fff",border:"0.5px solid #bfdbfe",borderRadius:10,padding:"14px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:16}}>
+      <div style=${{textAlign:"center",minWidth:52}}>
+        <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:36,color:TEAL,lineHeight:1}}>${kd}</div>
+        <div style=${{fontSize:11,color:"#9ca3af"}}>days</div>
+      </div>
+      <div>
+        <div style=${{fontSize:14,fontWeight:600,color:BK}}>${pinnedM?pinnedM.label:"Upcoming"}</div>
+        <div style=${{fontSize:12,color:"#9ca3af"}}>${pinnedM?pinnedM.sub:fmtDate(cfg.kiisaStart)}</div>
+      </div>
+    </div>`}
+    ${urgent.length>0&&html`<div style=${{marginBottom:16}}>
+      <${Lbl}>⚠ This week — needs action<//>
+      ${urgent.map(function(item){var d=daysUntil(item.deadline),lbl=dlLabel(d);return html`<div key=${item.id} onClick=${function(){p.onOpenItem(item.id)}} style=${{background:"#fff",border:"0.5px solid "+(d<=1?"#fca5a5":"#e5e7eb"),borderRadius:10,padding:"11px 14px",marginBottom:8,cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
+        <span style=${{width:8,height:8,borderRadius:"50%",background:SDOT[item.status],flexShrink:0}}/>
+        <span style=${{fontSize:14,fontWeight:600,color:BK,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${item.title}</span>
+        <span style=${{fontSize:12,color:lbl.color,fontWeight:600}}>${lbl.text}</span>
+      </div>`})}
+    </div>`}
+    ${ns.length>0&&html`<div style=${{marginBottom:16}}>
+      <${Lbl}>Next training sessions<//>
+      ${ns.map(function(s,i){return html`<div key=${i} style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:"11px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:12}}>
+        <span style=${{fontSize:18}}>${sessIcon(s.label)}</span>
+        <div style=${{flex:1}}>
+          <div style=${{fontSize:14,fontWeight:600,color:BK}}>${s.label}</div>
+          <div style=${{fontSize:12,color:"#9ca3af"}}>${s.offset===0?"Today":s.offset===1?"Tomorrow":new Date(s.dateStr).toLocaleDateString("en-GB",{weekday:"long"})}</div>
+        </div>
+      </div>`})}
+    </div>`}
+    <${Lbl}>All open items<//>
+    ${p.items.filter(function(i){return i.status==="open"||i.status==="in-progress"}).map(function(item){
+      return html`<${ItemCard} key=${item.id} item=${item} catStyles=${p.catStyles} onOpen=${function(){p.onOpenItem(item.id)}}/>`;
+    })}
+    ${active===0&&html`<div style=${{color:"#9ca3af",fontSize:13,padding:"20px 0",textAlign:"center"}}>No open items.</div>`}
+  </div>`;
+}
+
+/* ── SCHEDULE VIEW ──
+   Milestones come from Drive JSON — nothing hardcoded. ── */
+function ScheduleView(p){
+  var s1=useState(false),editing=s1[0],setEditing=s1[1];
+  var s2=useState({}),draft=s2[0],setDraft=s2[1];
+  var todayDow=new Date().getDay();
+  var DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var milestones=p.milestones||[];
+  var allDl=p.items.filter(function(i){return i.deadline&&i.status!=="done"})
+    .sort(function(a,b){return new Date(a.deadline)-new Date(b.deadline)});
+  return html`<div style=${{padding:"18px 16px 80px"}}>
+    ${milestones.length>0&&html`<div style=${{marginBottom:24}}>
+      <${Lbl}>Key milestones<//>
+      ${milestones.map(function(m,i){var d=daysUntil(m.date),passed=d!==null&&d<0,green=passed||m.active;return html`<div key=${i} style=${{display:"flex",gap:14,marginBottom:4}}>
+        <div style=${{display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0,paddingTop:2}}>
+          <div style=${{width:12,height:12,borderRadius:"50%",background:green?"#1D9E75":TEAL,border:"2.5px solid #f9fafb",boxShadow:"0 0 0 1.5px "+(green?"#1D9E75":TEAL)}}/>
+          ${i<milestones.length-1&&html`<div style=${{width:1.5,height:36,background:"#e5e7eb",margin:"3px 0"}}/>`}
+        </div>
+        <div style=${{flex:1,paddingBottom:8}}>
+          <div style=${{fontSize:14,fontWeight:600,color:passed&&!m.active?"#9ca3af":BK}}>${m.label}</div>
+          <div style=${{fontSize:12,color:"#9ca3af"}}>${m.sub}</div>
+          <div style=${{fontSize:12,color:"#9ca3af",marginTop:2}}>
+            ${fmtDate(m.date)}
+            ${d!==null&&d>=0&&html`<span style=${{color:d===0?"#ef4444":d<=3?"#EF9F27":"#9ca3af"}}> · ${d===0?"Today!":d+"d"}</span>`}
+            ${passed&&!m.active&&html`<span> · passed</span>`}
+            ${m.active&&html`<span style=${{color:"#1D9E75"}}> · active ✓</span>`}
+          </div>
+        </div>
+      </div>`})}
+    </div>`}
+    <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+      <${Lbl}>Weekly training schedule<//>
+      ${!editing
+        ?html`<button onClick=${function(){setDraft(Object.assign({},p.schedule));setEditing(true)}} style=${{...BS,fontSize:12,padding:"4px 10px"}}>Edit</button>`
+        :html`<div style=${{display:"flex",gap:6}}>
+          <button onClick=${function(){p.onScheduleChange(draft);setEditing(false)}} style=${{...BP,fontSize:12,padding:"4px 10px"}}>Save</button>
+          <button onClick=${function(){setEditing(false)}} style=${{...BS,fontSize:12,padding:"4px 10px"}}>Cancel</button>
+        </div>`}
+    </div>
+    <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,overflow:"hidden",marginBottom:24}}>
+      ${[1,2,3,4,5,6,0].map(function(dow,idx){
+        var session=editing?draft[dow]:p.schedule[dow],isToday=todayDow===dow;
+        return html`<div key=${dow} style=${{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:isToday?"#eff8f6":"transparent",borderBottom:idx<6?"0.5px solid #f3f4f6":"none"}}>
+          <span style=${{width:34,fontSize:12,fontWeight:isToday?600:400,color:isToday?TEAL:"#9ca3af"}}>${DAYS[dow]}</span>
+          ${editing
+            ?html`<input value=${draft[dow]||""} onInput=${function(e){var v=e.target.value,k=dow;setDraft(function(pr){var n=Object.assign({},pr);n[k]=v;return n})}} placeholder="Rest" style=${{...F,flex:1,padding:"4px 8px",fontSize:13}}/>`
+            :session?html`<span style=${{fontSize:16}}>${sessIcon(session)}</span><span style=${{fontSize:13,flex:1,color:isToday?BK:"#6b7280"}}>${session}</span>`
+            :html`<span style=${{fontSize:12,color:"#d1d5db",flex:1}}>Rest</span>`}
+          ${isToday&&!editing&&html`<span style=${{fontSize:11,color:TEAL,fontWeight:600}}>TODAY</span>`}
+        </div>`;
+      })}
+    </div>
+    <${Lbl}>All deadlines<//>
+    ${allDl.length===0
+      ?html`<div style=${{fontSize:13,color:"#9ca3af",padding:"12px 0"}}>No deadlines set.</div>`
+      :allDl.map(function(item){var d=daysUntil(item.deadline),lbl=dlLabel(d);return html`<div key=${item.id} onClick=${function(){p.onOpenItem(item.id)}} style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:"11px 14px",marginBottom:8,cursor:"pointer",display:"flex",gap:10,alignItems:"center"}}>
+        <span style=${{width:8,height:8,borderRadius:"50%",background:SDOT[item.status],flexShrink:0}}/>
+        <div style=${{flex:1}}><div style=${{fontSize:14,fontWeight:600,color:BK,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${item.title}</div>
+        <div style=${{fontSize:12,color:"#9ca3af"}}>${fmtDate(item.deadline)}</div></div>
+        ${lbl&&html`<span style=${{fontSize:12,fontWeight:600,color:lbl.color}}>${lbl.text}</span>`}
+      </div>`})}
+  </div>`;
+}
+
+/* ── LIST VIEW ── */
+function ListView(p){
+  var s1=useState("all"),fc=s1[0],setFc=s1[1];
+  var s2=useState("all"),fs=s2[0],setFs=s2[1];
+  var catKeys=Object.keys(p.catStyles);
+  var filtered=p.items.filter(function(i){return(fc==="all"||i.cat===fc)&&(fs==="all"||i.status===fs)});
+  var active=p.items.filter(function(i){return i.status==="open"||i.status==="in-progress"}).length;
+  return html`<div>
+    <div style=${{padding:"12px 16px",background:"#fff",borderBottom:"0.5px solid #e5e7eb"}}>
+      <div style=${{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+        ${["all"].concat(catKeys).map(function(c){return html`<${Pill} key=${c} on=${fc===c} label=${c==="all"?"All":c} onClick=${function(){setFc(c)}}/>`})}
+      </div>
+      <div style=${{display:"flex",gap:6,flexWrap:"wrap"}}>
+        ${["all"].concat(ALL_S).map(function(s){return html`<${Pill} key=${s} on=${fs===s} label=${s==="all"?"All status":SLBL[s]} onClick=${function(){setFs(s)}}/>`})}
+      </div>
+    </div>
+    <div style=${{padding:"14px 16px 80px"}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style=${{fontSize:12,color:"#9ca3af"}}>${filtered.length} shown · ${active} active</div>
+        <button onClick=${function(){p.onNav("add")}} style=${BP}>+ Add item</button>
+      </div>
+      ${filtered.map(function(item){return html`<${ItemCard} key=${item.id} item=${item} catStyles=${p.catStyles} onOpen=${function(){p.onOpenItem(item.id)}} onDelete=${p.onDeleteItem}/>`})}
+      ${filtered.length===0&&html`<div style=${{color:"#9ca3af",fontSize:13,padding:"30px 0",textAlign:"center"}}>No items match filters.</div>`}
+    </div>
+  </div>`;
+}
+
+/* ── DETAIL VIEW ── */
+function DetailView(p){
+  var item=p.item,items=p.items;
+  var s1=useState(false),editN=s1[0],setEditN=s1[1];
+  var s2=useState(item.notes||""),noteV=s2[0],setNoteV=s2[1];
+  var dl=daysUntil(item.deadline),dlLbl=dlLabel(dl);
+  var cs=(p.catStyles&&p.catStyles[item.cat])||{bg:"#f3f4f6",text:"#374151"};
+  function upd(ch){p.persistItems(items.map(function(i){return i.id===item.id?Object.assign({},i,ch):i}))}
+  return html`<div style=${{fontFamily:MONO,maxWidth:680,margin:"0 auto",background:"#f9fafb",minHeight:"100vh"}}>
+    <div style=${{padding:"14px 16px 12px",background:"#f9fafb",borderBottom:"0.5px solid #e5e7eb"}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <button onClick=${p.onBack} style=${BS}>← Back</button>
+        <select value=${item.status} onChange=${function(e){upd({status:e.target.value})}} style=${{...F,width:"auto",padding:"5px 9px",fontSize:12,cursor:"pointer"}}>
+          ${ALL_S.map(function(s){return html`<option key=${s} value=${s}>${SLBL[s]}</option>`})}
+        </select>
+      </div>
+      <div style=${{display:"flex",gap:10,alignItems:"flex-start"}}>
+        <span style=${{width:8,height:8,borderRadius:"50%",background:SDOT[item.status],flexShrink:0,marginTop:6}}/>
+        <div style=${{flex:1}}>
+          <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:15,color:BK,lineHeight:1.4}}>${item.title}</div>
+          ${dlLbl&&html`<div style=${{fontSize:12,color:dlLbl.color,marginTop:3,fontWeight:600}}>⏱ ${dlLbl.text}</div>`}
+        </div>
+        <span style=${{fontSize:11,padding:"2px 9px",borderRadius:20,background:cs.bg,color:cs.text,flexShrink:0}}>${item.cat}</span>
+      </div>
+    </div>
+    <div style=${{padding:"16px 16px 40px"}}>
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14,marginBottom:14}}>
+        <${Lbl}>Deadline<//>
+        <${DatePicker} value=${item.deadline||null} onChange=${function(d){upd({deadline:d})}}/>
+      </div>
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14,marginBottom:14}}>
+        <${Lbl}>Notes<//>
+        ${editN
+          ?html`<textarea value=${noteV} onInput=${function(e){setNoteV(e.target.value)}} style=${{...F,minHeight:160,resize:"vertical",lineHeight:1.75,display:"block"}}/>
+            <div style=${{display:"flex",gap:8,marginTop:10}}>
+              <button onClick=${function(){upd({notes:noteV});setEditN(false)}} style=${BP}>Save</button>
+              <button onClick=${function(){setEditN(false)}} style=${BS}>Cancel</button>
+            </div>`
+          :html`<div style=${{fontSize:13,color:"#374151",lineHeight:1.85,whiteSpace:"pre-wrap",minHeight:20}}>${item.notes||html`<span style=${{color:"#d1d5db"}}>No notes yet.</span>`}</div>
+            <button onClick=${function(){setNoteV(item.notes||"");setEditN(true)}} style=${{...BS,marginTop:12,fontSize:12}}>✎ Edit</button>`}
+      </div>
+      <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7}}>
+        💬 Garmin sync, Calendar push, coaching — open Claude and ask. Tasks sync via Google Drive.
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── ADD VIEW ── */
+function AddView(p){
+  var catKeys=Object.keys(p.catStyles);
+  var s1=useState({title:"",cat:catKeys[0]||"personal",status:"open",notes:"",deadline:null}),form=s1[0],setForm=s1[1];
+  function save(){if(!form.title.trim())return;p.onSave(Object.assign({},form,{id:uid(),title:form.title.trim(),msgs:[]}))}
+  return html`<div style=${{padding:"16px 16px 80px",background:"#f9fafb",minHeight:"100vh"}}>
+    <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:14,borderBottom:"0.5px solid #e5e7eb",marginBottom:22}}>
+      <button onClick=${p.onBack} style=${BS}>← Back</button>
+      <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:15,color:BK}}>New item</div>
+    </div>
+    <div style=${{display:"flex",flexDirection:"column",gap:18}}>
+      <div><${Lbl}>Title<//>
+        <input value=${form.title} onInput=${function(e){setForm(Object.assign({},form,{title:e.target.value}))}} placeholder="What needs attention?" style=${{...F,display:"block"}}/>
+      </div>
+      <div style=${{display:"flex",gap:12}}>
+        <div style=${{flex:1}}><${Lbl}>Category<//>
+          <select value=${form.cat} onChange=${function(e){setForm(Object.assign({},form,{cat:e.target.value}))}} style=${{...F,display:"block",cursor:"pointer"}}>
+            ${catKeys.map(function(c){return html`<option key=${c} value=${c}>${c}</option>`})}
+          </select>
+        </div>
+        <div style=${{flex:1}}><${Lbl}>Status<//>
+          <select value=${form.status} onChange=${function(e){setForm(Object.assign({},form,{status:e.target.value}))}} style=${{...F,display:"block",cursor:"pointer"}}>
+            ${["open","in-progress","deferred"].map(function(s){return html`<option key=${s} value=${s}>${SLBL[s]}</option>`})}
+          </select>
+        </div>
+      </div>
+      <div><${Lbl}>Deadline (optional)<//>
+        <${DatePicker} value=${form.deadline} onChange=${function(d){setForm(Object.assign({},form,{deadline:d}))}}/>
+      </div>
+      <div><${Lbl}>Notes<//>
+        <textarea value=${form.notes} onInput=${function(e){setForm(Object.assign({},form,{notes:e.target.value}))}} placeholder="Context, next steps, blockers…" rows=${5} style=${{...F,display:"block",resize:"vertical",lineHeight:1.75}}/>
+      </div>
+      <div style=${{display:"flex",gap:10}}>
+        <button onClick=${save} style=${BP}>Save item</button>
+        <button onClick=${p.onBack} style=${BS}>Cancel</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── SETUP VIEW ──
+   First launch or after reset. Credentials stored in localStorage only. ── */
+function SetupView(p){
+  var s1=useState(""),url=s1[0],setUrl=s1[1];
+  var s2=useState(""),token=s2[0],setToken=s2[1];
+  var s3=useState(false),testing=s3[0],setTesting=s3[1];
+  var s4=useState(null),err=s4[0],setErr=s4[1];
+  function connect(){
+    var u=url.trim(),t=token.trim();
+    if(!u||!t){setErr("Both fields are required.");return}
+    setTesting(true);setErr(null);
+    fetch(u+"?token="+encodeURIComponent(t))
+      .then(function(r){return r.json()})
+      .then(function(d){
+        if(d&&d.error==="unauthorized"){setErr("Wrong token — check your password.");}
+        else{saveCreds({url:u,token:t});p.onConnected({url:u,token:t});}
+      })
+      .catch(function(){setErr("Could not reach the script. Check the URL.")})
+      .finally(function(){setTesting(false)});
+  }
+  return html`<div style=${{fontFamily:MONO,maxWidth:680,margin:"0 auto",background:"#f9fafb",minHeight:"100vh"}}>
+    <div style=${{background:TEAL,padding:"20px 20px 16px",marginBottom:32}}>
+      <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:22,color:"#fff",letterSpacing:"-0.02em",marginBottom:4}}>TANEL <span style=${{opacity:0.55}}>/</span> CMD</div>
+      <div style=${{fontSize:12,color:"rgba(255,255,255,0.6)"}}>First-time setup</div>
+    </div>
+    <div style=${{padding:"0 20px 40px"}}>
+      <div style=${{fontSize:13,color:"#6b7280",lineHeight:1.8,marginBottom:28}}>Enter your Google Apps Script URL and access token.<br/>Stored on this device only.</div>
+      <div style=${{display:"flex",flexDirection:"column",gap:18}}>
+        <div><${Lbl}>Apps Script URL<//>
+          <input value=${url} onInput=${function(e){setUrl(e.target.value)}} placeholder="https://script.google.com/macros/s/…/exec" style=${{...F,display:"block"}}/>
+        </div>
+        <div><${Lbl}>Access token<//>
+          <input type="password" value=${token} onInput=${function(e){setToken(e.target.value)}} placeholder="Your secret password" style=${{...F,display:"block"}}/>
+        </div>
+        ${err&&html`<div style=${{fontSize:13,color:"#ef4444",padding:"10px 12px",background:"#fff1f2",border:"0.5px solid #fca5a5",borderRadius:8}}>${err}</div>`}
+        <button onClick=${connect} disabled=${testing} style=${{...BP,opacity:testing?0.5:1,justifyContent:"center",padding:"12px"}}>${testing?"Testing connection…":"Connect"}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── SETTINGS VIEW ── */
+function SettingsView(p){
+  var s1=useState(null),editK=s1[0],setEditK=s1[1];
+  var s2=useState(""),editV=s2[0],setEditV=s2[1];
+  var s3=useState(""),newC=s3[0],setNewC=s3[1];
+  var s4=useState(null),delConf=s4[0],setDelConf=s4[1];
+  var keys=Object.keys(p.catStyles);
+  function rename(ok){var nk=editV.trim().toLowerCase().replace(/\s+/g,"-");if(!nk||nk===ok){setEditK(null);return}var n={};keys.forEach(function(k){n[k===ok?nk:k]=p.catStyles[k]});p.onCatStylesChange(n);setEditK(null)}
+  function del(key){var n=Object.assign({},p.catStyles);delete n[key];p.onCatStylesChange(n);setDelConf(null)}
+  function add(){var nk=newC.trim().toLowerCase().replace(/\s+/g,"-");if(!nk||p.catStyles[nk])return;var n=Object.assign({},p.catStyles);n[nk]={bg:"#f3f4f6",text:"#374151"};p.onCatStylesChange(n);setNewC("")}
+  return html`<div style=${{padding:"18px 16px 80px"}}>
+    <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:16,color:BK,marginBottom:20}}>Settings</div>
+    <${Lbl}>Categories<//>
+    <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,overflow:"hidden",marginBottom:14}}>
+      ${keys.map(function(key,idx){var cs=p.catStyles[key];return html`<div key=${key} style=${{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:idx<keys.length-1?"0.5px solid #f3f4f6":"none"}}>
+        <span style=${{fontSize:11,padding:"2px 9px",borderRadius:20,background:(cs&&cs.bg)||"#f3f4f6",color:(cs&&cs.text)||"#374151",flexShrink:0}}>${key}</span>
+        ${editK===key
+          ?html`<input value=${editV} onInput=${function(e){setEditV(e.target.value)}} style=${{...F,flex:1,padding:"4px 8px",fontSize:12}} autofocus onKeyDown=${function(e){if(e.key==="Enter")rename(key)}}/>
+            <button onClick=${function(){rename(key)}} style=${{...BP,fontSize:11,padding:"3px 8px"}}>Save</button>
+            <button onClick=${function(){setEditK(null)}} style=${{...BS,fontSize:11,padding:"3px 8px"}}>✕</button>`
+          :html`<span style=${{flex:1}}/>
+            <button onClick=${function(){setEditK(key);setEditV(key)}} style=${{...BS,fontSize:11,padding:"3px 8px"}}>Rename</button>
+            ${keys.length>1&&(delConf===key
+              ?html`<span style=${{fontSize:11,color:"#ef4444",marginRight:4}}>Delete?</span>
+                <button onClick=${function(){del(key)}} style=${{...BP,fontSize:11,padding:"3px 8px",background:"#ef4444"}}>Yes</button>
+                <button onClick=${function(){setDelConf(null)}} style=${{...BS,fontSize:11,padding:"3px 8px"}}>No</button>`
+              :html`<button onClick=${function(){setDelConf(key)}} style=${{...BS,fontSize:11,padding:"3px 8px",color:"#ef4444",borderColor:"#fca5a5"}}>Delete</button>`
+            )}`}
+      </div>`})}
+    </div>
+    <div style=${{display:"flex",gap:8,marginBottom:32}}>
+      <input value=${newC} onInput=${function(e){setNewC(e.target.value)}} placeholder="New category name" style=${{...F,flex:1}} onKeyDown=${function(e){if(e.key==="Enter")add()}}/>
+      <button onClick=${add} style=${BP}>Add</button>
+    </div>
+    <div style=${{padding:"14px 16px",background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10}}>
+      <div style=${{fontSize:12,fontWeight:600,color:BK,marginBottom:8}}>Storage & integrations</div>
+      <div style=${{fontSize:12,color:"#6b7280",lineHeight:1.9,marginBottom:14}}>
+        <div>☁ Data in Google Drive (tanel_cmd_data.json)</div>
+        <div>🔄 Syncs via Google Apps Script</div>
+        <div>💬 Garmin, Calendar & coaching — Claude conversation</div>
+      </div>
+      <button onClick=${p.onReset} style=${{...BS,fontSize:12,color:"#ef4444",borderColor:"#fca5a5"}}>Reset connection</button>
+    </div>
+  </div>`;
+}
+
+/* ── APP SHELL ──
+   State: items, schedule, catStyles, config, milestones + credentials (cfg)
+   Startup: render from localStorage instantly → Drive sync in background
+   Save: localStorage immediately + Drive after 3s debounce
+   config and milestones pass through unchanged on item/schedule/cat saves ── */
+function App(){
+  var s1=useState([]),items=s1[0],setItems=s1[1];
+  var s2=useState(DEF_SCHEDULE),schedule=s2[0],setSchedule=s2[1];
+  var s3=useState(CSTYLE),catStyles=s3[0],setCatStyles=s3[1];
+  var s4=useState(DEF_CONFIG),config=s4[0],setConfig=s4[1];
+  var s5=useState(DEF_MILESTONES),milestones=s5[0],setMilestones=s5[1];
+  var s6=useState("home"),view=s6[0],setView=s6[1];
+  var s7=useState(null),selId=s7[0],setSelId=s7[1];
+  var s8=useState("loading"),syncSt=s8[0],setSyncSt=s8[1];
+  var s9=useState(false),ready=s9[0],setReady=s9[1];
+  var s10=useState(null),cfg=s10[0],setCfg=s10[1];
+
+  var iRef=useRef([]),schRef=useRef(DEF_SCHEDULE),csRef=useRef(CSTYLE);
+  var cfgDataRef=useRef(DEF_CONFIG),msRef=useRef(DEF_MILESTONES),credRef=useRef(null);
+  var saveTimer=useRef(null);
+
+  useEffect(function(){
+    var creds=loadCreds();
+    if(!creds){setReady(true);return;}
+    setCfg(creds);credRef.current=creds;
+
+    // Step 1: render from localStorage immediately
+    var it=lGet("tc_items")||[];
+    var sc=lGet("tc_schedule")||DEF_SCHEDULE;
+    var cs=lGet("tc_cats")||CSTYLE;
+    var cf=lGet("tc_cfg_data")||DEF_CONFIG;
+    var ms=lGet("tc_milestones")||DEF_MILESTONES;
+    setItems(it);iRef.current=it;
+    setSchedule(sc);schRef.current=sc;
+    setCatStyles(cs);csRef.current=cs;
+    setConfig(cf);cfgDataRef.current=cf;
+    setMilestones(ms);msRef.current=ms;
+    setReady(true);setSyncSt("syncing");
+
+    // Step 2: background Drive sync — updates UI silently if Drive is newer
+    scriptLoad(creds).then(function(ds){
+      if(ds&&ds.items){
+        var dit=ds.items,dsc=ds.schedule||DEF_SCHEDULE,dcs=ds.catStyles||CSTYLE;
+        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES;
+        setItems(dit);iRef.current=dit;
+        setSchedule(dsc);schRef.current=dsc;
+        setCatStyles(dcs);csRef.current=dcs;
+        setConfig(dcf);cfgDataRef.current=dcf;
+        setMilestones(dms);msRef.current=dms;
+        lSet("tc_items",dit);lSet("tc_schedule",dsc);lSet("tc_cats",dcs);
+        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);
+        setSyncSt("synced");
+      } else {setSyncSt("offline");}
+    });
+  },[]);
+
+  function scheduleSync(it,sc,cs){
+    lSet("tc_items",it);lSet("tc_schedule",sc);lSet("tc_cats",cs);
+    if(saveTimer.current)clearTimeout(saveTimer.current);
+    setSyncSt("pending");
+    saveTimer.current=setTimeout(function(){
+      var cred=credRef.current;if(!cred)return;
+      setSyncSt("syncing");
+      scriptSave(cred,{v:7,items:it,schedule:sc,catStyles:cs,
+        config:cfgDataRef.current,milestones:msRef.current,
+        updated:new Date().toISOString()})
+        .then(function(ok){setSyncSt(ok?"synced":"error");});
+    },3000);
+  }
+
+  function persistItems(u){setItems(u);iRef.current=u;scheduleSync(u,schRef.current,csRef.current)}
+  function persistSchedule(u){setSchedule(u);schRef.current=u;scheduleSync(iRef.current,u,csRef.current)}
+  function persistCatStyles(u){setCatStyles(u);csRef.current=u;scheduleSync(iRef.current,schRef.current,u)}
+
+  function openItem(id){setSelId(id);setView("detail")}
+  function deleteItem(id){
+    var u=items.filter(function(i){return i.id!==id});
+    persistItems(u);if(selId===id){setSelId(null);setView("home");}
+  }
+
+  function resetConnection(){
+    localStorage.clear();setCfg(null);credRef.current=null;
+    setView("home");setSelId(null);setItems([]);
+    setSchedule(DEF_SCHEDULE);setCatStyles(CSTYLE);
+    setConfig(DEF_CONFIG);setMilestones(DEF_MILESTONES);setSyncSt("loading");
+  }
+
+  function onConnected(newCreds){
+    setCfg(newCreds);credRef.current=newCreds;setSyncSt("syncing");
+    scriptLoad(newCreds).then(function(ds){
+      if(ds&&ds.items){
+        var dit=ds.items,dsc=ds.schedule||DEF_SCHEDULE,dcs=ds.catStyles||CSTYLE;
+        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES;
+        setItems(dit);iRef.current=dit;
+        setSchedule(dsc);schRef.current=dsc;
+        setCatStyles(dcs);csRef.current=dcs;
+        setConfig(dcf);cfgDataRef.current=dcf;
+        setMilestones(dms);msRef.current=dms;
+        lSet("tc_items",dit);lSet("tc_schedule",dsc);lSet("tc_cats",dcs);
+        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);
+        setSyncSt("synced");
+      } else {setSyncSt("offline");}
+    });
+  }
+
+  var sel=items.find(function(i){return i.id===selId});
+  var syncIcon={synced:"✓",offline:"⚠",pending:"…",syncing:"↑",error:"!",loading:""}[syncSt]||"";
+  var syncColor={synced:"rgba(255,255,255,0.5)",offline:"#EF9F27",error:"#f87171"}[syncSt]||"rgba(255,255,255,0.3)";
+
+  if(!ready)return html`<div style=${{padding:40,color:"#9ca3af",fontSize:13,textAlign:"center",fontFamily:MONO}}>Starting…</div>`;
+  if(!cfg)return html`<${SetupView} onConnected=${onConnected}/>`;
+  if(view==="detail"&&sel)return html`<${DetailView} item=${sel} items=${items} persistItems=${persistItems} onBack=${function(){setView("home")}} catStyles=${catStyles}/>`;
+  if(view==="add")return html`<${AddView} catStyles=${catStyles} onBack=${function(){setView("list")}} onSave=${function(item){persistItems([item].concat(items));setView("list")}}/>`;
+
+  var n=new Date();
+  var sub={home:WDAYS[n.getDay()]+" "+fmtDate(n.toISOString().slice(0,10)),schedule:"Deadlines & recurring sessions",list:items.filter(function(i){return i.status==="open"||i.status==="in-progress"}).length+" active",settings:"Configure your workspace"}[view]||"";
+  var viewTitle={schedule:"Schedule",list:"Items",settings:"Settings"};
+
+  return html`<div style=${{fontFamily:MONO,maxWidth:680,margin:"0 auto",background:"#f9fafb",minHeight:"100vh"}}>
+    <div style=${{background:TEAL,padding:"20px 20px 16px"}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:2}}>
+        <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:22,color:"#fff",letterSpacing:"-0.02em"}}>
+          ${view==="home"?html`TANEL <span style=${{opacity:0.55}}>/</span> CMD <span style=${{fontFamily:MONO,fontSize:13,fontWeight:400,opacity:0.5}}>v7</span>`:viewTitle[view]||""}
+        </div>
+        <span title=${"Drive: "+syncSt} style=${{fontSize:14,color:syncColor,marginTop:4}}>${syncIcon}</span>
+      </div>
+      <div style=${{fontSize:12,color:"rgba(255,255,255,0.6)"}}>${sub}</div>
+    </div>
+    <${NavBar} cur=${view} onNav=${setView}/>
+    ${view==="home"&&html`<${HomeView} items=${items} catStyles=${catStyles} schedule=${schedule} config=${config} milestones=${milestones} onOpenItem=${openItem}/>`}
+    ${view==="schedule"&&html`<${ScheduleView} items=${items} schedule=${schedule} milestones=${milestones} onScheduleChange=${persistSchedule} onOpenItem=${openItem}/>`}
+    ${view==="list"&&html`<${ListView} items=${items} catStyles=${catStyles} onNav=${setView} onOpenItem=${openItem} onDeleteItem=${deleteItem}/>`}
+    ${view==="settings"&&html`<${SettingsView} catStyles=${catStyles} onCatStylesChange=${persistCatStyles} onReset=${resetConnection}/>`}
+  </div>`;
+}
+
+render(html`<${App}/>`,document.getElementById("R"));
+</script>
+</body>
+</html>

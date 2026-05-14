@@ -57,6 +57,7 @@ var DEF_ITEMS=[];
 var DEF_SCHEDULE={1:"",2:"",4:"",5:"",6:"",0:""};
 var DEF_CONFIG={sobrietyStart:null,kiisaStart:null};
 var DEF_MILESTONES=[];
+var DEF_TRAINING=[];
 
 /* ── CREDENTIALS — stored in localStorage only, never in source ── */
 function loadCreds(){return lGet("tc_config")||null}
@@ -108,6 +109,9 @@ function sessIcon(l){var s=(l||"").toLowerCase();
   if(s.indexOf("gym")>=0||s.indexOf("circuit")>=0||s.indexOf("strength")>=0)return"💪";
   if(s.indexOf("flex")>=0||s.indexOf("swim")>=0)return"🔄";return"🏃";
 }
+function fmtPace(s){if(!s)return"";var m=Math.floor(s/60),sc=Math.round(s%60);return m+":"+String(sc).padStart(2,"0")+"/km"}
+function fmtDur(s){if(!s)return"";var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?h+"h "+m+"min":m+"min"}
+function actIcon(t){if(!t)return"🏃";var s=t.toLowerCase();if(s==="running")return"🏃";if(s==="cycling")return"🚴";if(s==="swimming")return"🏊";return"💪"}
 function calDays(y,m){var fd=new Date(y,m,1).getDay(),off=(fd+6)%7,tot=new Date(y,m+1,0).getDate(),d=[];
   for(var i=0;i<off;i++)d.push(null);for(var j=1;j<=tot;j++)d.push(j);return d;}
 
@@ -429,6 +433,22 @@ function DetailView(p){
         <${Lbl}>Notes<//>
         <div style=${{fontSize:13,color:"#374151",lineHeight:1.85,whiteSpace:"pre-wrap",minHeight:20}}>${item.notes||html`<span style=${{color:"#d1d5db"}}>No notes yet.</span>`}</div>
       </div>
+      ${item.id==="i7"&&html`<div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14,marginBottom:14}}>
+        <${Lbl}>Recent training<//>
+        ${(p.trainingLog||[]).length===0
+          ?html`<div style=${{fontSize:12,color:"#9ca3af",padding:"4px 0"}}>No training data yet — sync Garmin to populate.</div>`
+          :(p.trainingLog||[]).slice(0,5).map(function(a,i,arr){return html`<div key=${i} style=${{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:i<arr.length-1?"0.5px solid #f3f4f6":"none"}}>
+            <span style=${{fontSize:16,flexShrink:0}}>${actIcon(a.type)}</span>
+            <div style=${{flex:1}}>
+              <div style=${{fontSize:13,fontWeight:600,color:BK}}>${fmtDate(a.date)}${a.distance?html` · <span style=${{fontWeight:400}}>${(a.distance/1000).toFixed(1)}km</span>`:""}</div>
+              <div style=${{fontSize:11,color:"#9ca3af",display:"flex",gap:10,marginTop:2}}>
+                ${a.pace?html`<span>${fmtPace(a.pace)}</span>`:""}
+                ${a.hrAvg?html`<span>♥ ${a.hrAvg} bpm</span>`:""}
+                ${a.duration?html`<span>${fmtDur(a.duration)}</span>`:""}
+              </div>
+            </div>
+          </div>`})}
+      </div>`}
       <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7,marginBottom:20}}>
         💬 Garmin sync, Calendar push, coaching — open Claude and ask. Tasks sync via Google Drive.
       </div>
@@ -590,8 +610,9 @@ function App(){
   var s9=useState(false),ready=s9[0],setReady=s9[1];
   var s10=useState(null),cfg=s10[0],setCfg=s10[1];
 
+  var s11=useState(DEF_TRAINING),trainingLog=s11[0],setTrainingLog=s11[1];
   var iRef=useRef([]),schRef=useRef(DEF_SCHEDULE),csRef=useRef(CSTYLE);
-  var cfgDataRef=useRef(DEF_CONFIG),msRef=useRef(DEF_MILESTONES),credRef=useRef(null);
+  var cfgDataRef=useRef(DEF_CONFIG),msRef=useRef(DEF_MILESTONES),tlRef=useRef(DEF_TRAINING),credRef=useRef(null);
   var saveTimer=useRef(null);
 
   useEffect(function(){
@@ -605,25 +626,28 @@ function App(){
     var cs=lGet("tc_cats")||CSTYLE;
     var cf=lGet("tc_cfg_data")||DEF_CONFIG;
     var ms=lGet("tc_milestones")||DEF_MILESTONES;
+    var tl=lGet("tc_training")||DEF_TRAINING;
     setItems(it);iRef.current=it;
     setSchedule(sc);schRef.current=sc;
     setCatStyles(cs);csRef.current=cs;
     setConfig(cf);cfgDataRef.current=cf;
     setMilestones(ms);msRef.current=ms;
+    setTrainingLog(tl);tlRef.current=tl;
     setReady(true);setSyncSt("syncing");
 
     // Step 2: background Drive sync — updates UI silently if Drive is newer
     scriptLoad(creds).then(function(ds){
       if(ds&&ds.items){
         var dit=ds.items,dsc=ds.schedule||DEF_SCHEDULE,dcs=ds.catStyles||CSTYLE;
-        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES;
+        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES,dtl=ds.trainingLog||DEF_TRAINING;
         setItems(dit);iRef.current=dit;
         setSchedule(dsc);schRef.current=dsc;
         setCatStyles(dcs);csRef.current=dcs;
         setConfig(dcf);cfgDataRef.current=dcf;
         setMilestones(dms);msRef.current=dms;
+        setTrainingLog(dtl);tlRef.current=dtl;
         lSet("tc_items",dit);lSet("tc_schedule",dsc);lSet("tc_cats",dcs);
-        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);
+        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);lSet("tc_training",dtl);
         setSyncSt("synced");
       } else {setSyncSt("offline");}
     });
@@ -637,7 +661,7 @@ function App(){
       var cred=credRef.current;if(!cred)return;
       setSyncSt("syncing");
       scriptSave(cred,{v:8,items:it,schedule:sc,catStyles:cs,
-        config:cfgDataRef.current,milestones:msRef.current,
+        config:cfgDataRef.current,milestones:msRef.current,trainingLog:tlRef.current,
         updated:new Date().toISOString()})
         .then(function(ok){setSyncSt(ok?"synced":"error");});
     },3000);
@@ -665,14 +689,15 @@ function App(){
     scriptLoad(newCreds).then(function(ds){
       if(ds&&ds.items){
         var dit=ds.items,dsc=ds.schedule||DEF_SCHEDULE,dcs=ds.catStyles||CSTYLE;
-        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES;
+        var dcf=ds.config||DEF_CONFIG,dms=ds.milestones||DEF_MILESTONES,dtl=ds.trainingLog||DEF_TRAINING;
         setItems(dit);iRef.current=dit;
         setSchedule(dsc);schRef.current=dsc;
         setCatStyles(dcs);csRef.current=dcs;
         setConfig(dcf);cfgDataRef.current=dcf;
         setMilestones(dms);msRef.current=dms;
+        setTrainingLog(dtl);tlRef.current=dtl;
         lSet("tc_items",dit);lSet("tc_schedule",dsc);lSet("tc_cats",dcs);
-        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);
+        lSet("tc_cfg_data",dcf);lSet("tc_milestones",dms);lSet("tc_training",dtl);
         setSyncSt("synced");
       } else {setSyncSt("offline");}
     });
@@ -684,7 +709,7 @@ function App(){
 
   if(!ready)return html`<div style=${{padding:40,color:"#9ca3af",fontSize:13,textAlign:"center",fontFamily:MONO}}>Starting…</div>`;
   if(!cfg)return html`<${SetupView} onConnected=${onConnected}/>`;
-  if(view==="detail"&&sel)return html`<${DetailView} item=${sel} items=${items} persistItems=${persistItems} onBack=${function(){setView("home")}} catStyles=${catStyles} onDelete=${deleteItem}/>`;
+  if(view==="detail"&&sel)return html`<${DetailView} item=${sel} items=${items} persistItems=${persistItems} onBack=${function(){setView("home")}} catStyles=${catStyles} onDelete=${deleteItem} trainingLog=${trainingLog}/>`;
   if(view==="add")return html`<${AddView} catStyles=${catStyles} onBack=${function(){setView("list")}} onSave=${function(item){persistItems([item].concat(items));setView("list")}}/>`;
 
   var n=new Date();

@@ -6,26 +6,26 @@
 <title>TanelCMD</title>
 <!--
 ╔══════════════════════════════════════════════════════════════════╗
-║  TanelCMD v7 — CHANGE LOG                                       ║
+║  TanelCMD v8 — CHANGE LOG                                       ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  NEW vs v6:                                                      ║
-║  • Zero personal data in source code — clean repo history       ║
-║  • Hardcoded dates (sobriety/kiisa) removed from source         ║
-║    Now read from Drive JSON: config.sobrietyStart, kiisaStart   ║
-║  • Hardcoded milestones removed — read from Drive JSON          ║
-║    milestones array (label, sub, date, active)                  ║
-║  • All personal labels (Kiisa, Elering, Volteron) now in Drive  ║
-║  • App state expanded: config + milestones alongside items      ║
-║  • Saves preserve milestones + config (pass-through)            ║
-║  • Fresh repo — clean git history, no exposed personal data     ║
+║  NEW vs v7:                                                      ║
+║  • Edit button in Detail view — opens full edit mode for        ║
+║    title, category, status, deadline and notes simultaneously   ║
+║  • Delete button in Detail view — replaces hover-only delete    ║
+║    in list; shown explicitly with inline confirmation           ║
+║  • Editable item title — title changeable in Detail view        ║
+║  • Editable item category — category changeable in Detail view  ║
 ║                                                                  ║
-║  RETAINED FROM v6:                                               ║
+║  RETAINED FROM v7:                                               ║
+║  • Zero personal data in source code                            ║
+║  • Config + milestones read from Drive JSON                     ║
 ║  • Setup screen (Script URL + token, localStorage only)         ║
 ║  • Token auth on every request                                  ║
 ║  • Local-first startup, background Drive sync                   ║
 ║  • All task management, categories, deadlines, notes            ║
 ║  • Custom Mo–Su date picker, dd/mm/yyyy                          ║
-║  • Inline delete, sync status indicator, reset connection       ║
+║  • Status quick-change dropdown in Detail view header           ║
+║  • Sync status indicator, reset connection                      ║
 ╚══════════════════════════════════════════════════════════════════╝
 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/syne@5.0.3/700.css"/>
@@ -346,14 +346,63 @@ function ListView(p){
   </div>`;
 }
 
-/* ── DETAIL VIEW ── */
+/* ── DETAIL VIEW ──
+   Normal mode: status quick-change in header, deadline picker, notes (read-only).
+   Edit mode: all fields editable at once (title, category, status, deadline, notes).
+   Delete button: visible at bottom with inline confirmation. ── */
 function DetailView(p){
   var item=p.item,items=p.items;
-  var s1=useState(false),editN=s1[0],setEditN=s1[1];
-  var s2=useState(item.notes||""),noteV=s2[0],setNoteV=s2[1];
+  var s1=useState(false),editing=s1[0],setEditing=s1[1];
+  var s2=useState(false),delConf=s2[0],setDelConf=s2[1];
+  var s3=useState({}),draft=s3[0],setDraft=s3[1];
   var dl=daysUntil(item.deadline),dlLbl=dlLabel(dl);
   var cs=(p.catStyles&&p.catStyles[item.cat])||{bg:"#f3f4f6",text:"#374151"};
+  var catKeys=Object.keys(p.catStyles||{});
   function upd(ch){p.persistItems(items.map(function(i){return i.id===item.id?Object.assign({},i,ch):i}))}
+  function startEdit(){setDraft({title:item.title,cat:item.cat,status:item.status,deadline:item.deadline||null,notes:item.notes||""});setEditing(true);setDelConf(false)}
+  function saveEdit(){if(!draft.title.trim())return;upd({title:draft.title.trim(),cat:draft.cat,status:draft.status,deadline:draft.deadline,notes:draft.notes});setEditing(false)}
+
+  /* ── Edit mode ── */
+  if(editing)return html`<div style=${{fontFamily:MONO,maxWidth:680,margin:"0 auto",background:"#f9fafb",minHeight:"100vh"}}>
+    <div style=${{padding:"14px 16px 12px",background:"#f9fafb",borderBottom:"0.5px solid #e5e7eb"}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <button onClick=${function(){setEditing(false)}} style=${BS}>← Cancel</button>
+        <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:15,color:BK}}>Edit item</div>
+        <button onClick=${saveEdit} style=${BP}>Save</button>
+      </div>
+    </div>
+    <div style=${{padding:"16px 16px 40px",display:"flex",flexDirection:"column",gap:14}}>
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14}}>
+        <${Lbl}>Title<//>
+        <input value=${draft.title} onInput=${function(e){setDraft(Object.assign({},draft,{title:e.target.value}))}} style=${{...F,display:"block"}}/>
+      </div>
+      <div style=${{display:"flex",gap:10}}>
+        <div style=${{flex:1,background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14}}>
+          <${Lbl}>Category<//>
+          <select value=${draft.cat} onChange=${function(e){setDraft(Object.assign({},draft,{cat:e.target.value}))}} style=${{...F,cursor:"pointer"}}>
+            ${catKeys.map(function(c){return html`<option key=${c} value=${c}>${c}</option>`})}
+          </select>
+        </div>
+        <div style=${{flex:1,background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14}}>
+          <${Lbl}>Status<//>
+          <select value=${draft.status} onChange=${function(e){setDraft(Object.assign({},draft,{status:e.target.value}))}} style=${{...F,cursor:"pointer"}}>
+            ${ALL_S.map(function(s){return html`<option key=${s} value=${s}>${SLBL[s]}</option>`})}
+          </select>
+        </div>
+      </div>
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14}}>
+        <${Lbl}>Deadline<//>
+        <${DatePicker} value=${draft.deadline} onChange=${function(d){setDraft(Object.assign({},draft,{deadline:d}))}}/>
+      </div>
+      <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14}}>
+        <${Lbl}>Notes<//>
+        <textarea value=${draft.notes} onInput=${function(e){setDraft(Object.assign({},draft,{notes:e.target.value}))}} rows=${7} style=${{...F,display:"block",resize:"vertical",lineHeight:1.75}}/>
+      </div>
+      <button onClick=${saveEdit} style=${{...BP,justifyContent:"center",padding:12}}>Save changes</button>
+    </div>
+  </div>`;
+
+  /* ── Normal mode ── */
   return html`<div style=${{fontFamily:MONO,maxWidth:680,margin:"0 auto",background:"#f9fafb",minHeight:"100vh"}}>
     <div style=${{padding:"14px 16px 12px",background:"#f9fafb",borderBottom:"0.5px solid #e5e7eb"}}>
       <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -378,17 +427,20 @@ function DetailView(p){
       </div>
       <div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14,marginBottom:14}}>
         <${Lbl}>Notes<//>
-        ${editN
-          ?html`<textarea value=${noteV} onInput=${function(e){setNoteV(e.target.value)}} style=${{...F,minHeight:160,resize:"vertical",lineHeight:1.75,display:"block"}}/>
-            <div style=${{display:"flex",gap:8,marginTop:10}}>
-              <button onClick=${function(){upd({notes:noteV});setEditN(false)}} style=${BP}>Save</button>
-              <button onClick=${function(){setEditN(false)}} style=${BS}>Cancel</button>
-            </div>`
-          :html`<div style=${{fontSize:13,color:"#374151",lineHeight:1.85,whiteSpace:"pre-wrap",minHeight:20}}>${item.notes||html`<span style=${{color:"#d1d5db"}}>No notes yet.</span>`}</div>
-            <button onClick=${function(){setNoteV(item.notes||"");setEditN(true)}} style=${{...BS,marginTop:12,fontSize:12}}>✎ Edit</button>`}
+        <div style=${{fontSize:13,color:"#374151",lineHeight:1.85,whiteSpace:"pre-wrap",minHeight:20}}>${item.notes||html`<span style=${{color:"#d1d5db"}}>No notes yet.</span>`}</div>
       </div>
-      <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7}}>
+      <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7,marginBottom:20}}>
         💬 Garmin sync, Calendar push, coaching — open Claude and ask. Tasks sync via Google Drive.
+      </div>
+      <div style=${{display:"flex",gap:10,alignItems:"center"}}>
+        <button onClick=${startEdit} style=${BP}>✎ Edit</button>
+        ${!delConf
+          ?html`<button onClick=${function(){setDelConf(true)}} style=${{...BS,color:"#ef4444",borderColor:"#fca5a5"}}>Delete</button>`
+          :html`<div style=${{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style=${{fontSize:13,color:"#ef4444"}}>Delete this item?</span>
+            <button onClick=${function(){p.onDelete(item.id)}} style=${{...BP,background:"#ef4444",fontSize:12,padding:"6px 12px"}}>Yes, delete</button>
+            <button onClick=${function(){setDelConf(false)}} style=${{...BS,fontSize:12,padding:"6px 12px"}}>Cancel</button>
+          </div>`}
       </div>
     </div>
   </div>`;
@@ -584,7 +636,7 @@ function App(){
     saveTimer.current=setTimeout(function(){
       var cred=credRef.current;if(!cred)return;
       setSyncSt("syncing");
-      scriptSave(cred,{v:7,items:it,schedule:sc,catStyles:cs,
+      scriptSave(cred,{v:8,items:it,schedule:sc,catStyles:cs,
         config:cfgDataRef.current,milestones:msRef.current,
         updated:new Date().toISOString()})
         .then(function(ok){setSyncSt(ok?"synced":"error");});
@@ -632,7 +684,7 @@ function App(){
 
   if(!ready)return html`<div style=${{padding:40,color:"#9ca3af",fontSize:13,textAlign:"center",fontFamily:MONO}}>Starting…</div>`;
   if(!cfg)return html`<${SetupView} onConnected=${onConnected}/>`;
-  if(view==="detail"&&sel)return html`<${DetailView} item=${sel} items=${items} persistItems=${persistItems} onBack=${function(){setView("home")}} catStyles=${catStyles}/>`;
+  if(view==="detail"&&sel)return html`<${DetailView} item=${sel} items=${items} persistItems=${persistItems} onBack=${function(){setView("home")}} catStyles=${catStyles} onDelete=${deleteItem}/>`;
   if(view==="add")return html`<${AddView} catStyles=${catStyles} onBack=${function(){setView("list")}} onSave=${function(item){persistItems([item].concat(items));setView("list")}}/>`;
 
   var n=new Date();
@@ -643,7 +695,7 @@ function App(){
     <div style=${{background:TEAL,padding:"20px 20px 16px"}}>
       <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:2}}>
         <div style=${{fontFamily:SYNE,fontWeight:700,fontSize:22,color:"#fff",letterSpacing:"-0.02em"}}>
-          ${view==="home"?html`TANEL <span style=${{opacity:0.55}}>/</span> CMD <span style=${{fontFamily:MONO,fontSize:13,fontWeight:400,opacity:0.5}}>v7</span>`:viewTitle[view]||""}
+          ${view==="home"?html`TANEL <span style=${{opacity:0.55}}>/</span> CMD <span style=${{fontFamily:MONO,fontSize:13,fontWeight:400,opacity:0.5}}>v8</span>`:viewTitle[view]||""}
         </div>
         <span title=${"Drive: "+syncSt} style=${{fontSize:14,color:syncColor,marginTop:4}}>${syncIcon}</span>
       </div>

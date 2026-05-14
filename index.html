@@ -440,9 +440,17 @@ function DetailView(p){
         <div style=${{fontSize:13,color:"#374151",lineHeight:1.85,whiteSpace:"pre-wrap",minHeight:20}}>${item.notes||html`<span style=${{color:"#d1d5db"}}>No notes yet.</span>`}</div>
       </div>
       ${item.id==="i7"&&html`<div style=${{background:"#fff",border:"0.5px solid #e5e7eb",borderRadius:10,padding:14,marginBottom:14}}>
-        <${Lbl}>Recent training<//>
+        <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <${Lbl} style=${{marginBottom:0}}>Recent training<//>
+          <button onClick=${function(){
+            var tl=p.trainingLog||[];
+            var prompt="Sync my TanelCMD training log. Please do all of this in one go:\n1. Fetch my last 5 activities from Tredict using the activity-list tool (extendedSummary=1)\n2. Format each activity as JSON: {\"id\":\"...\",\"date\":\"YYYY-MM-DD\",\"type\":\"running/cycling/misc\",\"distance\":meters_number,\"duration\":seconds_number,\"pace\":sec_per_km_number,\"hrAvg\":bpm_number,\"hrMax\":bpm_number,\"calories\":kcal_number}\n3. Find tanel_cmd_data.json in my Google Drive and update ONLY the \"trainingLog\" array with these 5 activities (newest first), keeping all other fields exactly as they are\n4. Save back to the SAME file using its file ID — do not create a new file\nNo need to ask for confirmation, just do it.";
+            navigator.clipboard.writeText(prompt).catch(function(){});
+            window.open("https://claude.ai","_blank");
+          }} style=${{...BS,fontSize:11,padding:"3px 10px",color:TEAL,borderColor:"#a7f3d0"}}>🔄 Sync Garmin</button>
+        </div>
         ${(p.trainingLog||[]).length===0
-          ?html`<div style=${{fontSize:12,color:"#9ca3af",padding:"4px 0"}}>No training data yet — sync Garmin to populate.</div>`
+          ?html`<div style=${{fontSize:12,color:"#9ca3af",padding:"4px 0"}}>No training data yet — click Sync Garmin, paste the copied prompt in Claude.</div>`
           :(p.trainingLog||[]).slice(0,5).map(function(a,i,arr){return html`<div key=${i} style=${{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:i<arr.length-1?"0.5px solid #f3f4f6":"none"}}>
             <span style=${{fontSize:16,flexShrink:0}}>${actIcon(a.type)}</span>
             <div style=${{flex:1}}>
@@ -454,6 +462,7 @@ function DetailView(p){
               </div>
             </div>
           </div>`})}
+        <div style=${{fontSize:11,color:"#9ca3af",marginTop:10,paddingTop:10,borderTop:"0.5px solid #f3f4f6"}}>Click Sync Garmin → prompt copies to clipboard → paste in Claude → done.</div>
       </div>`}
       <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7,marginBottom:20}}>
         💬 Garmin sync, Calendar push, coaching — open Claude and ask. Tasks sync via Google Drive.

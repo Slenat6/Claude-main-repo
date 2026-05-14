@@ -15,6 +15,11 @@
 ║    in list; shown explicitly with inline confirmation           ║
 ║  • Editable item title — title changeable in Detail view        ║
 ║  • Editable item category — category changeable in Detail view  ║
+║  • Add to Calendar button — on items with a deadline, opens     ║
+║    Google Calendar in new tab with event pre-filled             ║
+║  • Milestone editing in Settings — add, edit, delete            ║
+║  • Config date editing in Settings — sobrietyStart, kiisaStart  ║
+║  • Training log in Training item detail view (from Drive JSON)  ║
 ║                                                                  ║
 ║  RETAINED FROM v7:                                               ║
 ║  • Zero personal data in source code                            ║
@@ -109,6 +114,7 @@ function sessIcon(l){var s=(l||"").toLowerCase();
   if(s.indexOf("gym")>=0||s.indexOf("circuit")>=0||s.indexOf("strength")>=0)return"💪";
   if(s.indexOf("flex")>=0||s.indexOf("swim")>=0)return"🔄";return"🏃";
 }
+function makeCalUrl(item){var t=encodeURIComponent(item.title);var d=item.deadline.replace(/-/g,"");var nd=new Date(item.deadline);nd.setDate(nd.getDate()+1);var e=nd.toISOString().slice(0,10).replace(/-/g,"");var det=encodeURIComponent((item.notes||"").slice(0,500));return"https://calendar.google.com/calendar/render?action=TEMPLATE&text="+t+"&dates="+d+"/"+e+"&details="+det}
 function fmtPace(s){if(!s)return"";var m=Math.floor(s/60),sc=Math.round(s%60);return m+":"+String(sc).padStart(2,"0")+"/km"}
 function fmtDur(s){if(!s)return"";var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?h+"h "+m+"min":m+"min"}
 function actIcon(t){if(!t)return"🏃";var s=t.toLowerCase();if(s==="running")return"🏃";if(s==="cycling")return"🚴";if(s==="swimming")return"🏊";return"💪"}
@@ -452,8 +458,9 @@ function DetailView(p){
       <div style=${{background:"#f0faf7",border:"0.5px solid #a7f3d0",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#065f46",lineHeight:1.7,marginBottom:20}}>
         💬 Garmin sync, Calendar push, coaching — open Claude and ask. Tasks sync via Google Drive.
       </div>
-      <div style=${{display:"flex",gap:10,alignItems:"center"}}>
+      <div style=${{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         <button onClick=${startEdit} style=${BP}>✎ Edit</button>
+        ${item.deadline&&html`<button onClick=${function(){window.open(makeCalUrl(item),"_blank")}} style=${{...BS,color:"#075E54",borderColor:"#a7f3d0"}}>📅 Calendar</button>`}
         ${!delConf
           ?html`<button onClick=${function(){setDelConf(true)}} style=${{...BS,color:"#ef4444",borderColor:"#fca5a5"}}>Delete</button>`
           :html`<div style=${{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
